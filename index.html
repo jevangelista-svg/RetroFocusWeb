@@ -1,0 +1,149 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Retro Focus – vintage film cameras</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=IBM+Plex+Sans:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="retroStyle.css">
+</head>
+<body>
+<header>
+  <div class="brand">Retro Focus</div>
+  <nav aria-label="Main">
+    <button data-v="shop">Shop</button>
+    <button data-v="cart">Cart (<span id="cartN">0</span>)</button>
+    <button data-v="signup">Sign up</button>
+    <button data-v="staff">Staff</button>
+  </nav>
+</header>
+<main></main>
+<dialog id="dlg"></dialog>
+<div id="toast" role="status"></div>
+
+<script>
+const $=s=>document.querySelector(s);
+const K='retrofocus.v1';
+const seed={products:[
+ {id:1,name:"Canon AE-1 (1976)",description:"Classic 35mm SLR, film camera.",price:250,stock:2},
+ {id:2,name:"Nikon FM2 (1982)",description:"Mechanical shutter SLR.",price:450,stock:1},
+ {id:3,name:"Leica M6 (1994)",description:"Legendary rangefinder.",price:3000,stock:1},
+ {id:4,name:"Kodak Tri-X 400 (36exp)",description:"Black & white film roll.",price:7.5,stock:40},
+ {id:5,name:"Light meter - Sekonic L-308",description:"Light meter for film exposure.",price:90,stock:5},
+ {id:6,name:"Leather camera strap (vintage)",description:"Leather strap for your camera.",price:30,stock:10}],
+ customers:[],promos:{},orders:[],staff:null};
+let db;try{db=JSON.parse(localStorage[K])||structuredClone(seed)}catch{db=structuredClone(seed)}
+let cart={};try{cart=JSON.parse(sessionStorage.cart||'{}')}catch{}
+let staff=sessionStorage.staff==='1',view='shop',tab='products',last=null;
+const save=()=>{localStorage[K]=JSON.stringify(db);sessionStorage.cart=JSON.stringify(cart)};
+const eur=n=>'€'+Number(n).toFixed(2);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const nextId=a=>Math.max(0,...a.map(x=>x.id))+1;
+const prod=id=>db.products.find(p=>p.id===Number(id));
+function toast(t){const e=$('#toast');e.textContent=t;e.style.display='block';clearTimeout(toast.t);toast.t=setTimeout(()=>e.style.display='none',2600)}
+async function hash(t){if(window.crypto&&crypto.subtle){const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(t));return[...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('')}let h=5381;for(const c of t)h=(h*33)^c.charCodeAt(0);return'x'+(h>>>0)}
+
+/* ---------- Views ---------- */
+const vShop=()=>`<h1>Vintage film cameras and gear</h1><p class="lead">Film cameras, film and accessories.</p><div class="grid">${db.products.map(p=>`
+<article class="frame"><div class="in"><h2>${esc(p.name)}</h2><p class="price">${eur(p.price)}</p>
+<p class="${p.stock?'':'out'}">${p.stock?p.stock+' in stock':'Sold out'}</p>
+<div class="row"><button class="ghost" data-a="detail" data-id="${p.id}">Details</button>
+<button data-a="add" data-id="${p.id}" ${p.stock?'':'disabled'}>Add to cart</button></div></div></article>`).join('')}</div>`;
+
+const vCart=()=>{
+ const ids=Object.keys(cart);
+ if(!ids.length)return`<h1>Your cart is empty</h1><p class="lead">Pick something from the shop to get started.</p><button class="btn" data-v2="shop">Browse the shop</button>`;
+ return`<h1>Your cart</h1><div class="scroll"><table><tr><th>Item</th><th>Price</th><th>Quantity</th><th>Total</th><th></th></tr>${ids.map(id=>{const p=prod(id);return`<tr><td>${esc(p.name)}</td><td>${eur(p.price)}</td>
+ <td><input type="number" min="1" max="${p.stock}" value="${cart[id]}" data-a="qty" data-id="${id}" aria-label="Quantity for ${esc(p.name)}"></td>
+ <td>${eur(p.price*cart[id])}</td><td><button data-a="rm" data-id="${id}">Remove</button></td></tr>`}).join('')}</table></div>
+ <div class="panel" style="margin-top:22px"><h2>Checkout</h2>
+ <label for="em">Email (leave blank to check out as a guest)</label><input id="em" type="email" autocomplete="email">
+ <label><input id="dl" type="checkbox">Deliver to me</label>
+ <div id="adw" hidden><label for="ad">Delivery address</label><textarea id="ad" rows="3"></textarea></div>
+ <label for="pr">Promo code</label><input id="pr" autocomplete="off">
+ <div class="tot" id="tot" style="margin:16px 0"></div>
+ <button class="btn" data-a="order">Place order</button></div>`};
+
+const vSignup=()=>`<h1>Sign up</h1><p class="lead">Save your details for faster delivery, and get 10% off every 10th purchase.</p>
+<div class="panel"><label for="sn">Name</label><input id="sn"><label for="se">Email</label><input id="se" type="email"><label for="sa">Delivery address (optional)</label><textarea id="sa" rows="3"></textarea>
+<p><button class="btn" data-a="signup">Create account</button></p></div>`;
+
+const vDone=()=>`<h1>Order #${last.id} placed</h1><p class="lead">Total paid: ${eur(last.total)}${last.delivery?'. Delivering to: '+esc(last.deliveryAddress):'. Collect in store.'}</p><button class="btn" data-v2="shop">Keep shopping</button>`;
+
+function vStaff(){
+ if(!db.staff)return`<h1>Set up staff access</h1><p class="lead">Create the first staff account for this shop.</p><div class="panel"><label for="su">Username</label><input id="su"><label for="sp">Password (8+ characters)</label><input id="sp" type="password"><p><button class="btn" data-a="setup">Create staff account</button></p></div>`;
+ if(!staff)return`<h1>Staff login</h1><div class="panel"><label for="su">Username</label><input id="su" autocomplete="username"><label for="sp">Password</label><input id="sp" type="password" autocomplete="current-password"><p><button class="btn" data-a="login">Log in</button></p></div>`;
+ const T=[['products','Products and stock'],['promos','Promo codes'],['orders','Orders'],['customers','Customers']];
+ let body='';
+ if(tab==='products')body=`<div class="panel"><h2>Add a product</h2><label for="pn">Name</label><input id="pn"><label for="pd">Description</label><input id="pd"><label for="pp">Price (€)</label><input id="pp" type="number" step="0.01" min="0"><label for="ps">Stock</label><input id="ps" type="number" min="0" value="1"><p><button data-a="addp">Add product</button></p></div>
+ <div class="scroll"><table><tr><th>ID</th><th>Product</th><th>Price</th><th>Stock</th><th></th></tr>${db.products.map(p=>`<tr><td>${p.id}</td><td>${esc(p.name)}</td><td>${eur(p.price)}</td><td><input type="number" min="0" id="s${p.id}" value="${p.stock}" aria-label="Stock for ${esc(p.name)}"></td><td><button data-a="stock" data-id="${p.id}">Update stock</button></td></tr>`).join('')}</table></div>`;
+ if(tab==='promos')body=`<div class="panel"><h2>Create a promo code</h2><label for="pc">Code</label><input id="pc"><label for="pv">Percent off (1–100)</label><input id="pv" type="number" min="1" max="100"><p><button data-a="promo">Create promo</button></p></div>
+ <table><tr><th>Code</th><th>Discount</th><th></th></tr>${Object.entries(db.promos).map(([c,v])=>`<tr><td>${esc(c)}</td><td>${v}%</td><td><button data-a="delp" data-code="${esc(c)}">Delete</button></td></tr>`).join('')||'<tr><td colspan="3">No promo codes yet.</td></tr>'}</table>`;
+ if(tab==='orders')body=[...db.orders].reverse().map(o=>`<div class="panel"><strong>Order #${o.id}</strong> – ${new Date(o.at).toLocaleString('en-IE')} – ${eur(o.total)}<br>Customer: ${o.customerId??'guest'} | ${o.delivery?'Delivery to '+esc(o.deliveryAddress):'Collection'}<ul>${o.items.map(i=>`<li>${i.qty} × ${esc(i.name)} @ ${eur(i.price)}</li>`).join('')}</ul></div>`).join('')||'<p>No orders yet.</p>';
+ if(tab==='customers')body=db.customers.length?`<div class="scroll"><table><tr><th>ID</th><th>Name</th><th>Email</th><th>Purchases</th><th>Address</th></tr>${db.customers.map(c=>`<tr><td>${c.id}</td><td>${esc(c.name)}</td><td>${esc(c.email)}</td><td>${c.purchases}</td><td>${esc(c.address)}</td></tr>`).join('')}</table></div>`:'<p>No customers yet.</p>';
+ return`<h1>Staff area</h1><div class="tabs">${T.map(([k,l])=>`<button data-a="tab" data-t="${k}" aria-current="${tab===k}">${l}</button>`).join('')}<button data-a="logout">Log out</button></div>${body}`}
+
+/* ---------- Totals ---------- */
+function calc(){
+ const email=($('#em')?.value||'').trim().toLowerCase();
+ const cu=email&&db.customers.find(c=>(c.email||'').toLowerCase()===email);
+ let sub=0;for(const[id,q]of Object.entries(cart))sub+=prod(id).price*q;
+ const loy=cu&&(cu.purchases+1)%10===0?+(sub*.1).toFixed(2):0;
+ const code=($('#pr')?.value||'').trim().toUpperCase(),pct=code?db.promos[code]:0;
+ const pro=pct?+(sub*pct/100).toFixed(2):0,disc=Math.min(sub,loy+pro);
+ return{cu,sub,loy,pro,code,pct,disc,total:+(sub-disc).toFixed(2)}}
+function totals(){
+ const t=calc();
+ $('#tot').innerHTML=`<p>Subtotal: ${eur(t.sub)}</p>${t.loy?`<p>Loyalty discount (10%): −${eur(t.loy)}</p>`:''}${t.pro?`<p>Promo ${esc(t.code)} (${t.pct}%): −${eur(t.pro)}</p>`:''}${t.code&&!t.pct?'<p class="err">That promo code is not valid.</p>':''}<p class="big">Total: ${eur(t.total)}</p>`;
+ const ad=$('#ad');if($('#dl').checked&&t.cu?.address&&!ad.value)ad.value=t.cu.address}
+
+function render(){
+ $('#cartN').textContent=Object.values(cart).reduce((a,b)=>a+b,0);
+ document.querySelectorAll('nav button').forEach(b=>b.setAttribute('aria-current',b.dataset.v===view));
+ $('main').innerHTML={shop:vShop,cart:vCart,signup:vSignup,staff:vStaff,done:vDone}[view]();
+ if(view==='cart'&&Object.keys(cart).length)totals()}
+const go=v=>{view=v;render();scrollTo(0,0)};
+
+/* ---------- Events ---------- */
+document.addEventListener('input',e=>{if(['em','pr','ad'].includes(e.target.id))totals()});
+document.addEventListener('change',e=>{
+ if(e.target.id==='dl'){$('#adw').hidden=!e.target.checked;totals()}
+ if(e.target.dataset.a==='qty'){const p=prod(e.target.dataset.id),q=parseInt(e.target.value);
+  if(!q||q<1)delete cart[p.id];else if(q>p.stock){cart[p.id]=p.stock;toast('Only '+p.stock+' in stock.')}else cart[p.id]=q;save();render()}});
+document.addEventListener('click',async e=>{
+ const nb=e.target.closest('[data-v],[data-v2]');if(nb){go(nb.dataset.v||nb.dataset.v2);return}
+ if(e.target.closest('#dlg [data-close]')){$('#dlg').close();return}
+ const b=e.target.closest('[data-a]');if(!b||b.tagName==='INPUT')return;
+ const a=b.dataset.a,id=Number(b.dataset.id),val=s=>($(s)?.value||'').trim();
+ if(a==='detail'){const p=prod(id);$('#dlg').innerHTML=`<h2>${esc(p.name)}</h2><p class="price">${eur(p.price)}</p><p>${esc(p.description)||'No description.'}</p><p>${p.stock?p.stock+' in stock':'Sold out'}</p><button class="btn" data-close>Close</button>`;$('#dlg').showModal()}
+ if(a==='add'){const p=prod(id);if((cart[id]||0)+1>p.stock){toast('No more stock available.');return}cart[id]=(cart[id]||0)+1;save();render();toast(p.name+' added to cart.')}
+ if(a==='rm'){delete cart[id];save();render()}
+ if(a==='signup'){const name=val('#sn'),email=val('#se'),address=val('#sa');
+  if(!name)return toast('Enter your name.');
+  if(email&&db.customers.some(c=>(c.email||'').toLowerCase()===email.toLowerCase()))return toast('That email is already registered.');
+  db.customers.push({id:nextId(db.customers),name,email:email||null,address:address||null,purchases:0,created:new Date().toISOString()});save();toast('Account created.');go('shop')}
+ if(a==='order'){const t=calc(),dlv=$('#dl').checked,addr=val('#ad');
+  if(dlv&&!addr)return toast('Enter a delivery address.');
+  for(const[i,q]of Object.entries(cart))if(prod(i).stock<q)return toast('Not enough stock for '+prod(i).name+'.');
+  const items=Object.entries(cart).map(([i,q])=>{const p=prod(i);p.stock-=q;return{productId:p.id,name:p.name,price:p.price,qty:q}});
+  last={id:nextId(db.orders),at:new Date().toISOString(),customerId:t.cu?t.cu.id:null,items,subtotal:t.sub,discount:t.disc,total:t.total,delivery:dlv,deliveryAddress:dlv?addr:null};
+  db.orders.push(last);if(t.cu)t.cu.purchases++;cart={};save();go('done')}
+ if(a==='setup'){const u=val('#su'),p=$('#sp').value;if(!u||p.length<8)return toast('Enter a username and a password of 8+ characters.');
+  db.staff={u,h:await hash(p)};staff=true;sessionStorage.staff='1';save();render()}
+ if(a==='login'){if(val('#su')===db.staff.u&&await hash($('#sp').value)===db.staff.h){staff=true;sessionStorage.staff='1';render()}else toast('Username or password is incorrect.')}
+ if(a==='logout'){staff=false;sessionStorage.staff='0';render()}
+ if(!staff)return;
+ if(a==='tab'){tab=b.dataset.t;render()}
+ if(a==='addp'){const name=val('#pn'),price=parseFloat(val('#pp')),stock=parseInt(val('#ps'))||0;
+  if(!name||isNaN(price)||price<0)return toast('Enter a name and a valid price.');
+  db.products.push({id:nextId(db.products),name,description:val('#pd'),price,stock});save();render();toast('Product added.')}
+ if(a==='stock'){const v=parseInt($('#s'+id).value);if(isNaN(v)||v<0)return toast('Enter a valid stock number.');prod(id).stock=v;save();toast('Stock updated.')}
+ if(a==='promo'){const c=val('#pc').toUpperCase(),v=parseInt(val('#pv'));if(!c||!(v>=1&&v<=100))return toast('Enter a code and a percent from 1 to 100.');db.promos[c]=v;save();render();toast('Promo created.')}
+ if(a==='delp'){delete db.promos[b.dataset.code];save();render()}
+});
+render();
+</script>
+</body>
+</html>
